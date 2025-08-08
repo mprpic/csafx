@@ -97,8 +97,7 @@ func downloadFromProviderURL(providerURL string) error {
 
 	fmt.Printf("Provider: %s (%s)\n", providerMetadata.Publisher.Name, providerMetadata.Publisher.Category)
 
-	var items []string
-	var allDirURLs []string
+	urlSet := make(map[string]struct{})
 	for _, dist := range providerMetadata.Distributions {
 		dirURLs, err := dist.GetDirectoryURLs()
 		if err != nil {
@@ -106,11 +105,14 @@ func downloadFromProviderURL(providerURL string) error {
 			continue
 		}
 		for _, dirURL := range dirURLs {
-			items = append(items, dirURL)
-			allDirURLs = append(allDirURLs, dirURL)
+			urlSet[dirURL] = struct{}{}
 		}
 	}
 
+	var allDirURLs []string
+	for url := range urlSet {
+		allDirURLs = append(allDirURLs, url)
+	}
 	if len(allDirURLs) == 1 {
 		if err := downloadFromDirectoryURL(allDirURLs[0]); err != nil {
 			return fmt.Errorf("failed to download from %s: %w", allDirURLs[0], err)
@@ -118,6 +120,10 @@ func downloadFromProviderURL(providerURL string) error {
 		return nil
 	}
 
+	var items []string
+	for _, url := range allDirURLs {
+		items = append(items, url)
+	}
 	items = append(items, "Download all")
 	prompt := promptui.Select{
 		Label:    "Select data set to download",
@@ -159,12 +165,7 @@ func downloadFromProviderURL(providerURL string) error {
 		return nil
 	}
 
-	if choiceIndex >= len(allDirURLs) {
-		return fmt.Errorf("invalid choice index: %d", choiceIndex)
-	}
-
-	selectedDirURL := allDirURLs[choiceIndex]
-	return downloadFromDirectoryURL(selectedDirURL)
+	return downloadFromDirectoryURL(allDirURLs[choiceIndex])
 }
 
 // downloadFromAggregator handles CLI interaction for aggregator-based downloads
