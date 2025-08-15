@@ -8,9 +8,10 @@ import (
 	"time"
 )
 
-// SyncMetadata tracks when the cache was last synchronized
+// SyncMetadata tracks when the cache was last synchronized and its source
 type SyncMetadata struct {
-	LastSync time.Time `json:"last_sync"`
+	LastSync  time.Time `json:"last_sync"`
+	SourceURL string    `json:"source_url"`
 }
 
 // LoadSyncMetadata reads the sync metadata file from the cache directory
@@ -104,4 +105,139 @@ func EnsureCachePath() (string, error) {
 		return "", fmt.Errorf("failed to create cache directory %s: %w", cachePath, err)
 	}
 	return cachePath, nil
+}
+
+// DataSetInfo represents information about a cached CSAF data set
+type DataSetInfo struct {
+	Name string
+	Path string
+	Size int64
+}
+
+// ListDataSets returns all available cached CSAF data sets with their sizes
+func ListDataSets() ([]DataSetInfo, error) {
+	cachePath := DetermineCachePath()
+
+	// Check if cache directory exists
+	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+		return []DataSetInfo{}, nil
+	}
+
+	entries, err := os.ReadDir(cachePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read cache directory: %w", err)
+	}
+
+	var dataSets []DataSetInfo
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dataSetPath := filepath.Join(cachePath, entry.Name())
+			size, err := calculateDirSize(dataSetPath)
+			if err != nil {
+				// If we can't calculate size, still include the data set with 0 size
+				size = 0
+			}
+
+			dataSets = append(dataSets, DataSetInfo{
+				Name: entry.Name(),
+				Path: dataSetPath,
+				Size: size,
+			})
+		}
+	}
+
+	return dataSets, nil
+}
+
+// ClearDataSet removes a specific cached CSAF data set
+func ClearDataSet(dataSetName string) error {
+	cachePath := DetermineCachePath()
+	dataSetPath := filepath.Join(cachePath, dataSetName)
+
+	// Check if data set exists
+	if _, err := os.Stat(dataSetPath); os.IsNotExist(err) {
+		return fmt.Errorf("data set '%s' does not exist", dataSetName)
+	}
+
+	// Remove the data set directory
+	if err := os.RemoveAll(dataSetPath); err != nil {
+		return fmt.Errorf("failed to clear data set '%s': %w", dataSetName, err)
+	}
+
+	return nil
+}
+
+// ClearAllDataSets removes all cached CSAF data sets
+func ClearAllDataSets() error {
+	dataSets, err := ListDataSets()
+	if err != nil {
+		return fmt.Errorf("failed to list data sets: %w", err)
+	}
+
+	var errors []error
+	for _, ds := range dataSets {
+		if err := ClearDataSet(ds.Name); err != nil {
+			errors = append(errors, err)
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("failed to clear some data sets: %v", errors)
+	}
+
+	return nil
+}
+
+// calculateDirSize calculates the total size of a directory
+func calculateDirSize(dirPath string) (int64, error) {
+	var size int64
+
+	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+
+	return size, err
+}
+
+// FormatSize formats a size in bytes to a human-readable string
+func FormatSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// GetDataSetSourceURL finds the source URL for a named data set
+func GetDataSetSourceURL(dataSetName string) (string, error) {
+	cachePath := DetermineCachePath()
+	dataSetPath := filepath.Join(cachePath, dataSetName)
+
+	// Check if data set exists
+	if _, err := os.Stat(dataSetPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("data set '%s' does not exist", dataSetName)
+	}
+
+	// Load metadata to get source URL and last sync time
+	metadata, err := LoadSyncMetadata(dataSetPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to load metadata for '%s': %w", dataSetName, err)
+	}
+
+	if metadata == nil {
+		return "", fmt.Errorf("no metadata found for data set '%s'", dataSetName)
+	}
+
+	return metadata.SourceURL, nil
 }

@@ -59,22 +59,30 @@ func ExtractCSAFArchive(archivePath, destination string) error {
 	}
 	defer zr.Close()
 
-	buf := new(bytes.Buffer)
-	_, err = io.Copy(buf, zr)
+	tarPath := filepath.Join(destination, "csaf_advisories.tar")
+	tarFile, err := os.Create(tarPath)
+	if err != nil {
+		return fmt.Errorf("failed to create tar file: %w", err)
+	}
+	defer tarFile.Close()
+
+	// Stream decompressed data directly to file instead of loading into memory
+	_, err = io.Copy(tarFile, zr)
 	if err != nil {
 		return fmt.Errorf("failed to decompress archive: %w", err)
 	}
 
-	tarPath := filepath.Join(destination, "csaf_advisories.tar")
-	if err := os.WriteFile(tarPath, buf.Bytes(), 0644); err != nil {
-		return fmt.Errorf("failed to write tar file: %w", err)
-	}
+	// Close the tar file before extraction
+	tarFile.Close()
 
 	archive := archiver.NewTar()
 	err = archive.Unarchive(tarPath, destination)
 	if err != nil {
 		return fmt.Errorf("failed to extract tar archive: %w", err)
 	}
+
+	// Clean up the intermediate tar file
+	os.Remove(tarPath)
 
 	fmt.Printf("CSAF archive extracted to %s\n", destination)
 	return nil
@@ -228,7 +236,7 @@ func PerformIncrementalUpdate(directoryURL, targetDir string, lastSync time.Time
 }
 
 // urlToDirectoryName converts a URL to a directory name that is used as a
-// namespace for a given cached CSAF data set
+// identifier for a given cached CSAF data set
 func urlToDirectoryName(rawURL string) string {
 	u, _ := url.Parse(rawURL)
 
@@ -280,7 +288,10 @@ func FromDirectoryURL(directoryURL string) (string, error) {
 		}
 
 		// Update metadata with current sync time
-		newMetadata := &cache.SyncMetadata{LastSync: time.Now()}
+		newMetadata := &cache.SyncMetadata{
+			LastSync:  time.Now(),
+			SourceURL: directoryURL,
+		}
 		if err := cache.SaveSyncMetadata(targetPath, newMetadata); err != nil {
 			return "", fmt.Errorf("failed to save sync metadata: %w", err)
 		}
@@ -320,7 +331,6 @@ func FromDirectoryURL(directoryURL string) (string, error) {
 	}
 
 	if archiveURL != "" {
-		fmt.Printf("Archive available, downloading from: %s\n", archiveURL)
 		archivePath := filepath.Join(targetPath, "archive.tar.zst")
 
 		err := GetCSAFArchive(archiveURL, archivePath)
@@ -363,7 +373,10 @@ func FromDirectoryURL(directoryURL string) (string, error) {
 	}
 
 	// Save metadata for successful full download
-	newMetadata := &cache.SyncMetadata{LastSync: time.Now()}
+	newMetadata := &cache.SyncMetadata{
+		LastSync:  time.Now(),
+		SourceURL: directoryURL,
+	}
 	if err := cache.SaveSyncMetadata(targetPath, newMetadata); err != nil {
 		return "", fmt.Errorf("failed to save sync metadata: %w", err)
 	}
